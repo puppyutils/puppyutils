@@ -69,4 +69,10 @@ macro_rules! help_text {
     ($name: literal) => {
         include_str!(concat!("../../docs/", $name, ".txt"))
     };
+
+    // for commands with their own directory.
+    // like `ls`
+    (Deep, $name: literal) => {
+        include_str!(concat!("../../../docs/", $name, ".txt"))
+    };
 }
