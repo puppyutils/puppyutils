@@ -1,72 +1,25 @@
-#![allow(unused)] // FIXME: remove this
-#![allow(clippy::all)] // FIXME: This is horrible but this file is a mess anyway
+mod options;
+mod settings;
 
 use coreutils::Result;
 use rustix::{
     fs::{Dir, Mode, OFlags, open},
     termios::tcgetwinsize,
 };
-use sap::Parser;
-use std::io::{BufWriter, Write, stdout};
+use std::io::{BufWriter, Stdout, Write, stdout};
 
+const VERSION: &str = coreutils::version_text!("ls");
+const HELP: &str = coreutils::help_text!(Deep, "ls");
 const CURRENT_DIR_PATH: &str = ".";
 
-#[repr(u8)]
-enum FileType {
-    Regular = 0,
-    Directory = 1,
-    BlockDevice = 2,
-    SymbolicLink = 3,
-    Socket = 4,
-    CharacterSpecial = 5,
-    Fifo = 6,
-}
-
-impl FileType {
-    fn get_letter(&self) -> &'static str {
-        use FileType::*;
-
-        match self {
-            Regular => "-",
-            Directory => "d",
-            BlockDevice => "b",
-            SymbolicLink => "l",
-            Socket => "s",
-            CharacterSpecial => "c",
-            Fifo => "p",
-        }
-    }
-}
-
-struct Permissions(u16);
-
-impl Permissions {
-    fn new(perms: u16) -> Option<Self> {
-        if perms > 511 { None } else { Some(Self(perms)) }
-    }
-}
-
 fn main() -> Result {
-    let mut any_args = false;
-    let mut args = Parser::from_env()?;
+    let mut out = BufWriter::new(stdout());
+    let winsize = get_win_size();
+    let (cfg, help_or_version) =
+        settings::parse_arguments(winsize.ws_col, &mut out, HELP, VERSION)?;
 
-    while let Some(arg) = args.forward()? {
-        if !any_args {
-            any_args = true;
-        }
-
-        match arg {
-            _ => {}
-        }
-    }
-
-    if any_args {
-        todo!()
-    } else {
-        // We received no arguments
-        // therefore we can do the most "basic" action
-        // just listing contents of the current directory.
-
+    if !help_or_version {
+        drop(cfg);
         let fd = open(
             CURRENT_DIR_PATH,
             OFlags::DIRECTORY | OFlags::RDONLY,
@@ -83,15 +36,20 @@ fn main() -> Result {
             .filter(|entry| !entry.starts_with('.'))
             .collect::<Vec<_>>();
 
-        print_all(names)?;
+        print_all(names, out)?;
     }
 
     Ok(())
 }
 
+fn get_win_size() -> rustix::termios::Winsize {
+    let stderr_fd = rustix::stdio::stderr();
+    tcgetwinsize(stderr_fd).expect("couldn't get terminal size")
+}
+
 // FIXME: This algorithm to print out lines is incredibly simplistic
 // and slightly worse than the one used in GNU's ls.
-fn print_all(cols: Vec<String>) -> Result {
+fn print_all(cols: Vec<String>, stdout: BufWriter<Stdout>) -> Result {
     const MIN_COLUMN_WIDTH: u16 = 3;
 
     let len = cols.len();
@@ -102,18 +60,16 @@ fn print_all(cols: Vec<String>) -> Result {
 
     let max_cols = if max_idx < len { max_idx } else { len };
 
-    print_into_columns(cols.iter().map(String::as_str), max_cols)
+    print_into_columns(cols.iter().map(String::as_str), max_cols, stdout)
 }
 
-fn print_into_columns<I>(iter: I, columns: usize) -> Result
+fn print_into_columns<I>(iter: I, columns: usize, mut stdout: BufWriter<Stdout>) -> Result
 where
     I: IntoIterator<Item: AsRef<str> + core::fmt::Display>,
 {
-    let mut stdout = BufWriter::new(stdout());
     let mut counter = 0;
     for line in iter {
         if counter == columns {
-            print!("\n");
             stdout.write_all(b"\n")?;
             counter = 0;
         }
